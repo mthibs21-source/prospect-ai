@@ -53,51 +53,152 @@ async function copy(text) {
   }
 }
 
+function runDevTests() {
+  console.assert(normalizeCompanySlug("House Call Pro") === "housecallpro", "slug normalization failed");
+  console.assert(normalizeCompanySlug(123) === "", "slug non-string safety failed");
+  console.assert(safeJsonParse('{"a":1}', null)?.a === 1, "json parse failed");
+}
+
+/* -------------------------------------------------------------------------- */
+/*                         ADVANCED DISCOVERY SERVICES                        */
+/* -------------------------------------------------------------------------- */
+
+async function googleCompanySearch(vertical) {
+  try {
+    const res = await fetch(`/api/google-saas-crawler?vertical=${encodeURIComponent(vertical)}`);
+    if (!res.ok) throw new Error();
+    const data = await res.json();
+    return Array.isArray(data) ? data : [];
+  } catch {
+    return [];
+  }
+}
+
+async function capterraSearch(vertical) {
+  try {
+    const res = await fetch(`/api/capterra-scraper?vertical=${encodeURIComponent(vertical)}`);
+    if (!res.ok) throw new Error();
+    const data = await res.json();
+    return Array.isArray(data) ? data : [];
+  } catch {
+    return [];
+  }
+}
+
+async function linkedinLeads(company) {
+  try {
+    const res = await fetch(`/api/linkedin-decision-makers?company=${encodeURIComponent(company)}`);
+    if (!res.ok) throw new Error();
+    const data = await res.json();
+    return Array.isArray(data) ? data : null;
+  } catch {
+    return null;
+  }
+}
+
+async function hunterVerify(name, company) {
+  try {
+    const res = await fetch(`/api/hunter-verify?name=${encodeURIComponent(name)}&company=${encodeURIComponent(company)}`);
+    if (!res.ok) throw new Error();
+    return await res.json();
+  } catch {
+    return null;
+  }
+}
+
+async function clearbitEnrich(domain) {
+  try {
+    if (!domain) return null;
+    const cleanDomain = String(domain).replace(/^https?:\/\//, "").replace(/\/$/, "");
+    const res = await fetch(`/api/clearbit-enrich?domain=${encodeURIComponent(cleanDomain)}`);
+    if (!res.ok) throw new Error();
+    return await res.json();
+  } catch {
+    return null;
+  }
+}
+
+async function detectSignals(company) {
+  try {
+    const res = await fetch(`/api/company-signals?company=${encodeURIComponent(company)}`);
+    if (!res.ok) throw new Error();
+    return await res.json();
+  } catch {
+    return null;
+  }
+}
+
+async function triggerDailyDiscovery(vertical = "service saas") {
+  try {
+    await fetch(`/api/daily-discovery?vertical=${encodeURIComponent(vertical)}`, {
+      method: "POST",
+    });
+  } catch {
+    /* silent noop */
+  }
+}
+
 /* -------------------------------------------------------------------------- */
 /*                               EMAIL BUILDER                                */
 /* -------------------------------------------------------------------------- */
+
+function randomFrom(arr) {
+  return arr[Math.floor(Math.random() * arr.length)];
+}
 
 function buildFallbackEmail(contact, company, senderCompany, newsHook, title) {
   const first = contact?.name?.split(" ")[0] || "there";
   const sender = senderCompany?.name || "our team";
   const pitch = senderCompany?.pitch || "embedded payments";
   const role = title || "your role";
-  const safeNews = newsHook || "recent momentum";
 
   const openers = [
-    `Saw ${company} mentioned around ${safeNews}.`,
-    `Noticed ${company} has been showing signals around ${safeNews}.`,
-    `Looks like ${company} is gaining momentum around ${safeNews}.`,
+    `Saw ${company} gaining traction recently and wanted to reach out.`,
+    `Was researching ${company} and a few things stood out.`,
+    `Came across ${company} while digging into SaaS platforms in this space.`,
+    `Noticed ${company} appears to be expanding product capabilities.`,
+  ];
+
+  const context = [
+    `Given your role as ${role}, figured this might be relevant.`,
+    `${role} leaders are usually the ones evaluating this.`,
+    `Thought this might be relevant to your team.`,
   ];
 
   const pains = [
-    "A lot of SaaS teams eventually hit friction around payments, reconciliation, and monetization.",
-    "Platforms serving operators usually feel pressure to make billing and collections easier inside the product.",
-    "Many vertical SaaS companies end up needing tighter payment workflows built directly into their platform.",
+    "Many SaaS platforms eventually hit friction around payments and monetization.",
+    "A lot of vertical SaaS teams start looking at embedding payments directly in their workflow.",
+    "Operators usually want billing and collections native inside the product.",
   ];
 
   const values = [
     `${sender} helps SaaS platforms embed payments directly into the product experience.`,
-    `${sender} works with software teams that want to turn payments into a native workflow inside their platform.`,
-    `${sender} helps product teams simplify collections and create new revenue through embedded payments.`,
+    `${sender} works with product teams turning payments into a native workflow.`,
+    `${sender} helps platforms simplify collections and unlock revenue from payments.`,
   ];
 
-  const opener = openers[Math.floor(Math.random() * openers.length)];
-  const pain = pains[Math.floor(Math.random() * pains.length)];
-  const value = values[Math.floor(Math.random() * values.length)];
+  const signalLines = [
+    newsHook ? `Also noticed this signal: ${newsHook}.` : null,
+    newsHook ? `${newsHook} made me think this could be timely.` : null,
+    null,
+  ].filter(Boolean);
+
+  const maybeSignal = signalLines.length ? `\n\n${randomFrom(signalLines)}` : "";
 
   return `Hi ${first},
 
-${opener} Given your role as ${role}, figured this might be relevant.
+${randomFrom(openers)}
 
-${pain}
+${randomFrom(context)}
 
-${value}
+${randomFrom(pains)}
 
-Worth a quick conversation if you're exploring ${pitch}?`;
+${randomFrom(values)}${maybeSignal}
+
+Worth comparing notes if ${pitch} is on your roadmap?`;
 }
 
-async function generateEmail(contact, company, senderCompany, newsHook) {
+async function generateEmail(contact, company, senderCompany, signal) {
   try {
     const res = await fetch("/api/generate-email", {
       method: "POST",
@@ -109,26 +210,18 @@ async function generateEmail(contact, company, senderCompany, newsHook) {
         company,
         senderCompany: senderCompany?.name,
         pitch: senderCompany?.pitch,
-        news: newsHook,
+        signal,
       }),
     });
 
-    if (!res.ok) throw new Error("API error");
+    if (!res.ok) throw new Error("AI email failed");
 
     const data = await res.json();
-    if (typeof data?.email === "string" && data.email.trim()) {
-      return data.email;
-    }
+    if (typeof data?.email === "string" && data.email.trim()) return data.email;
 
-    throw new Error("Invalid email response");
+    throw new Error();
   } catch {
-    return buildFallbackEmail(
-      contact,
-      company,
-      senderCompany,
-      newsHook,
-      contact?.title
-    );
+    return buildFallbackEmail(contact, company, senderCompany, signal, contact?.title);
   }
 }
 
@@ -179,19 +272,22 @@ function Landing({ setPage }) {
       name: "ServiceTitan",
       vertical: "Field Service Software",
       score: 91,
-      email: "Saw ServiceTitan expanding integrations for field contractors. Many platforms in this space are embedding payments to simplify collections inside the workflow. Worth exploring if that is something your team is evaluating?",
+      email:
+        "Saw ServiceTitan expanding integrations for field contractors. Many platforms in this space are embedding payments to simplify collections inside the workflow. Worth exploring if that is something your team is evaluating?",
     },
     {
       name: "Jobber",
       vertical: "Home Services SaaS",
       score: 88,
-      email: "Noticed Jobber has been investing heavily in workflow automation for service businesses. A lot of platforms in that space are embedding payments to remove friction during invoicing and collections. Curious if that is on your roadmap?",
+      email:
+        "Noticed Jobber has been investing heavily in workflow automation for service businesses. A lot of platforms in that space are embedding payments to remove friction during invoicing and collections. Curious if that is on your roadmap?",
     },
     {
       name: "Housecall Pro",
       vertical: "Contractor Software",
       score: 93,
-      email: "Looks like Housecall Pro continues to grow in the contractor SaaS space. Many platforms serving trades are embedding payments directly into job workflows. Might be worth comparing notes if that is something your team is evaluating.",
+      email:
+        "Looks like Housecall Pro continues to grow in the contractor SaaS space. Many platforms serving trades are embedding payments directly into job workflows. Might be worth comparing notes if that is something your team is evaluating.",
     },
   ];
 
@@ -226,13 +322,15 @@ function Landing({ setPage }) {
       <div className="flex gap-4">
         <button
           onClick={() => setPage("login")}
-          className={`bg-emerald-500 px-6 py-3 rounded-lg text-sm font-semibold ${BTN}`}>
+          className={`bg-emerald-500 px-6 py-3 rounded-lg text-sm font-semibold ${BTN}`}
+        >
           Start Prospecting
         </button>
 
         <button
           onClick={() => setPage("pricing")}
-          className={`bg-zinc-800 px-6 py-3 rounded-lg text-sm font-semibold ${BTN}`}>
+          className={`bg-zinc-800 px-6 py-3 rounded-lg text-sm font-semibold ${BTN}`}
+        >
           View Pricing
         </button>
       </div>
@@ -241,12 +339,12 @@ function Landing({ setPage }) {
         Returning User?{" "}
         <button
           onClick={() => setPage("login")}
-          className="text-emerald-400 hover:text-emerald-300">
+          className="text-emerald-400 hover:text-emerald-300"
+        >
           Login here
         </button>
       </div>
 
-      {/* live discovery ticker */}
       <div className="mt-8 text-xs text-emerald-300">
         {ticker} companies discovered by users today
       </div>
@@ -336,38 +434,129 @@ function Landing({ setPage }) {
   );
 }
 
+/* -------------------------------------------------------------------------- */
+/*                              AUTH / PRICING                                */
+/* -------------------------------------------------------------------------- */
 
-async function capterraSearch(vertical) {
-  try {
-    const res = await fetch(`/api/capterra-search?vertical=${encodeURIComponent(vertical)}`);
-    if (!res.ok) throw new Error();
-    return await res.json();
-  } catch {
-    return [];
+function AuthScreen({ onLogin }) {
+  const [name, setName] = useState("");
+  const [email, setEmail] = useState("");
+
+  function submit() {
+    if (!email.trim()) return;
+    onLogin({ name: name.trim() || "User", email: email.trim() });
   }
+
+  return (
+    <div className="max-w-md mx-auto mt-20 bg-zinc-900 border border-white/10 rounded-xl p-8 space-y-4">
+      <h2 className="text-2xl font-semibold">Login</h2>
+      <p className="text-sm text-zinc-400">Access your prospecting workspace.</p>
+      <input
+        placeholder="Name"
+        value={name}
+        onChange={(e) => setName(e.target.value)}
+        className="w-full bg-black border border-white/10 rounded-lg px-4 py-3"
+      />
+      <input
+        placeholder="Email"
+        value={email}
+        onChange={(e) => setEmail(e.target.value)}
+        className="w-full bg-black border border-white/10 rounded-lg px-4 py-3"
+      />
+      <button
+        onClick={submit}
+        className={`w-full bg-emerald-500 py-3 rounded-lg font-semibold ${BTN}`}
+      >
+        Continue
+      </button>
+    </div>
+  );
 }
 
-async function linkedinLeads(company) {
-  try {
-    const res = await fetch(`/api/linkedin-leads?company=${encodeURIComponent(company)}`);
-    if (!res.ok) throw new Error();
-    return await res.json();
-  } catch {
-    return null;
-  }
+function Pricing() {
+  const [billing, setBilling] = useState("monthly");
+
+  const plans = [
+    {
+      name: "Starter",
+      monthly: "$39",
+      yearly: "$29",
+      credits: "500 credits",
+      features: [
+        "Company discovery",
+        "Decision maker extraction",
+        "AI email drafts",
+      ],
+    },
+    {
+      name: "Growth",
+      monthly: "$99",
+      yearly: "$79",
+      credits: "2000 credits",
+      features: [
+        "Verified emails",
+        "LinkedIn intelligence",
+        "Signal detection",
+      ],
+    },
+    {
+      name: "Scale",
+      monthly: "$249",
+      yearly: "$199",
+      credits: "10,000 credits",
+      features: [
+        "Daily prospect discovery",
+        "Buying signals",
+        "API access",
+      ],
+    },
+  ];
+
+  return (
+    <div className="max-w-6xl mx-auto py-20 px-6 space-y-10">
+      <h1 className="text-4xl font-bold text-center">Pricing</h1>
+
+      <div className="flex justify-center gap-3">
+        <button
+          onClick={() => setBilling("monthly")}
+          className={`px-4 py-2 rounded ${billing === "monthly" ? "bg-emerald-500" : "bg-zinc-800"}`}
+        >
+          Monthly
+        </button>
+        <button
+          onClick={() => setBilling("yearly")}
+          className={`px-4 py-2 rounded ${billing === "yearly" ? "bg-emerald-500" : "bg-zinc-800"}`}
+        >
+          Annual
+        </button>
+      </div>
+
+      <div className="grid md:grid-cols-3 gap-8">
+        {plans.map((p) => (
+          <div key={p.name} className="bg-zinc-900 border border-white/10 rounded-xl p-8 space-y-4">
+            <h3 className="text-xl font-semibold">{p.name}</h3>
+            <div className="text-3xl font-bold">
+              {billing === "monthly" ? p.monthly : p.yearly}
+            </div>
+            <div className="text-emerald-300 text-sm">{p.credits}</div>
+            <ul className="text-sm text-zinc-400 space-y-2">
+              {p.features.map((f) => (
+                <li key={f}>• {f}</li>
+              ))}
+            </ul>
+            <button className={`w-full bg-emerald-500 py-3 rounded-lg ${BTN}`}>
+              Choose Plan
+            </button>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
 }
 
-async function emailEnrich(name, company) {
-  try {
-    const res = await fetch(
-      `/api/email-enrich?name=${encodeURIComponent(name)}&company=${encodeURIComponent(company)}`
-    );
-    if (!res.ok) throw new Error();
-    return await res.json();
-  } catch {
-    return null;
-  }
-}
+/* -------------------------------------------------------------------------- */
+/*                               DISCOVERY ENGINE                             */
+/* -------------------------------------------------------------------------- */
 
 const demoCompanies = [
   "ServiceTitan",
@@ -384,10 +573,6 @@ const demoCompanies = [
 
 const demoTitles = ["CEO", "Founder", "Head of Partnerships", "VP Product", "CTO"];
 const demoSignals = ["Hiring", "Payments", "Growth", "Funding", "Expansion"];
-
-function randomFrom(arr) {
-  return arr[Math.floor(Math.random() * arr.length)];
-}
 
 function generateDemoDecisionMakers(company) {
   return new Array(3).fill(0).map((_, i) => ({
